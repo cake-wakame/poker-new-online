@@ -335,6 +335,47 @@
             margin-top: 5px;
             font-weight: bold;
         }
+
+        .timer-display {
+            text-align: center;
+            font-size: 1.8em;
+            font-weight: bold;
+            padding: 15px;
+            background: #3498db;
+            color: white;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        .timer-display.warning {
+            background: #f39c12;
+        }
+
+        .timer-display.danger {
+            background: #e74c3c;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .draw-counter {
+            text-align: center;
+            font-size: 1.3em;
+            font-weight: bold;
+            padding: 10px;
+            background: #ecf0f1;
+            border-radius: 5px;
+            margin: 10px 0;
+            color: #2c3e50;
+        }
+
+        .draw-counter .remaining {
+            color: #27ae60;
+            font-size: 1.2em;
+        }
     </style>
 </head>
 <body>
@@ -350,6 +391,10 @@
         </div>
 
         <div id="gameScreen" class="hidden">
+            <div id="timerDisplay" class="timer-display hidden">
+                残り時間: <span id="timerValue">5:00</span>
+            </div>
+
             <div class="game-info">
                 <div class="info-item">
                     チップ: <span class="chips" id="chips">1000</span>
@@ -357,6 +402,10 @@
                 <div class="info-item">
                     現在のベット: <span class="bet" id="currentBet">0</span>
                 </div>
+            </div>
+
+            <div id="drawCounter" class="draw-counter hidden">
+                残りドロー回数: <span class="remaining" id="remainingDraws">3</span> / 3
             </div>
 
             <div id="bettingControls" class="bet-controls hidden">
@@ -383,6 +432,7 @@
 
             <div class="controls">
                 <button class="btn-secondary" id="drawBtn" onclick="draw()" disabled>ドロー（選択したカードを交換）</button>
+                <button class="btn-secondary" id="skipBtn" onclick="skipDraw()" style="display:none;">ドローをスキップ</button>
             </div>
         </div>
 
@@ -522,6 +572,10 @@
         let selectedCards = new Set();
         let playerHand = [];
         let opponentHand = [];
+        let timerInterval = null;
+        let remainingTime = 0;
+        let currentPhase = '';
+        let remainingDraws = 3;
 
         function findMatch() {
             socket.emit('findMatch');
@@ -541,6 +595,14 @@
             document.getElementById('gameScreen').classList.remove('hidden');
             document.getElementById('bettingControls').classList.remove('hidden');
             document.getElementById('result').textContent = 'ベットしてください';
+            document.getElementById('drawCounter').classList.add('hidden');
+        });
+
+        socket.on('timerStarted', ({ phase, timeLimit, startTime }) => {
+            currentPhase = phase;
+            const elapsed = Date.now() - startTime;
+            remainingTime = Math.max(0, timeLimit - elapsed);
+            startTimer();
         });
 
         socket.on('betPlaced', ({ chips: newChips, bet }) => {
@@ -551,24 +613,50 @@
             document.getElementById('bettingControls').classList.add('hidden');
         });
 
-        socket.on('cardsDealt', ({ hand }) => {
+        socket.on('cardsDealt', ({ hand, drawCount, remainingDraws: remaining }) => {
             playerHand = hand;
             selectedCards.clear();
+            remainingDraws = remaining;
             displayCards();
             updateStatus('カードを交換してください', 'playing');
             document.getElementById('drawBtn').disabled = false;
-            document.getElementById('result').textContent = '交換したいカードをクリックしてください（交換しない場合はそのままドロー）';
+            document.getElementById('drawCounter').classList.remove('hidden');
+            document.getElementById('remainingDraws').textContent = remainingDraws;
+            document.getElementById('skipBtn').style.display = 'inline-block';
+            document.getElementById('result').textContent = '交換したいカードをクリックしてください（最大3回まで交換可能）';
         });
 
-        socket.on('cardsDrawn', ({ hand }) => {
+        socket.on('cardsDrawn', ({ hand, drawCount, remainingDraws: remaining }) => {
             playerHand = hand;
             selectedCards.clear();
+            remainingDraws = remaining;
             displayCards();
-            updateStatus('相手のドローを待っています...', 'playing');
+            document.getElementById('remainingDraws').textContent = remainingDraws;
+            
+            if (remainingDraws > 0) {
+                updateStatus(`カードを交換してください（残り${remainingDraws}回）`, 'playing');
+                document.getElementById('drawBtn').disabled = false;
+                document.getElementById('result').textContent = `交換完了！残り${remainingDraws}回交換できます`;
+            } else {
+                updateStatus('相手のドローを待っています...', 'playing');
+                document.getElementById('drawBtn').disabled = true;
+                document.getElementById('skipBtn').style.display = 'none';
+                document.getElementById('result').textContent = 'ドロー完了！相手を待っています...';
+            }
+        });
+
+        socket.on('drawSkipped', () => {
+            updateStatus('ドローをスキップしました', 'playing');
             document.getElementById('drawBtn').disabled = true;
+            document.getElementById('skipBtn').style.display = 'none';
+        });
+
+        socket.on('drawError', (message) => {
+            alert(message);
         });
 
         socket.on('gameResult', (data) => {
+            stopTimer();
             opponentHand = data.opponentHand;
             playerHand = data.yourHand;
             chips = data.chips;
@@ -577,22 +665,31 @@
             
             document.getElementById('playerHandInfo').textContent = data.yourHandName;
             document.getElementById('opponentHandInfo').textContent = data.opponentHandName;
+            document.getElementById('drawCounter').classList.add('hidden');
+            document.getElementById('skipBtn').style.display = 'none';
             
             const resultDiv = document.getElementById('result');
+            let resultMessage = '';
+            
+            if (data.reason) {
+                resultMessage = `【${data.reason}】 `;
+            }
+            
             if (data.winner === 'you') {
-                resultDiv.textContent = `勝利！ ${data.yourHandName}で${data.pot}チップ獲得！`;
+                resultMessage += `勝利！ ${data.yourHandName}で${data.pot}チップ獲得！`;
                 resultDiv.className = 'result win';
                 updateStatus('あなたの勝利！', 'playing');
             } else if (data.winner === 'draw') {
-                resultDiv.textContent = `引き分け！ ベット額を返却`;
+                resultMessage += `引き分け！ ベット額を返却`;
                 resultDiv.className = 'result draw';
                 updateStatus('引き分け', 'playing');
             } else {
-                resultDiv.textContent = `敗北... 相手の${data.opponentHandName}に負けました`;
+                resultMessage += `敗北... 相手の${data.opponentHandName}に負けました`;
                 resultDiv.className = 'result lose';
                 updateStatus('敗北...', 'playing');
             }
             
+            resultDiv.textContent = resultMessage;
             currentBet = 0;
             updateDisplay();
             
@@ -606,6 +703,7 @@
                 document.getElementById('opponentCardsArea').innerHTML = '';
                 playerHand = [];
                 opponentHand = [];
+                remainingDraws = 3;
                 updateStatus('次のラウンド準備中', 'playing');
             }, 5000);
         });
@@ -648,6 +746,56 @@
         function draw() {
             const indices = Array.from(selectedCards);
             socket.emit('drawCards', { roomId, indices });
+        }
+
+        function skipDraw() {
+            if (confirm('ドローをスキップしますか？（これ以上カードを交換できなくなります）')) {
+                socket.emit('skipDraw', { roomId });
+            }
+        }
+
+        function startTimer() {
+            stopTimer();
+            document.getElementById('timerDisplay').classList.remove('hidden');
+            
+            timerInterval = setInterval(() => {
+                remainingTime -= 1000;
+                
+                if (remainingTime <= 0) {
+                    stopTimer();
+                    return;
+                }
+                
+                updateTimerDisplay();
+            }, 1000);
+            
+            updateTimerDisplay();
+        }
+
+        function stopTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            document.getElementById('timerDisplay').classList.add('hidden');
+        }
+
+        function updateTimerDisplay() {
+            const seconds = Math.floor(remainingTime / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            
+            const timeString = `${minutes}:${secs.toString().padStart(2, '0')}`;
+            document.getElementById('timerValue').textContent = timeString;
+            
+            const timerDiv = document.getElementById('timerDisplay');
+            timerDiv.className = 'timer-display';
+            
+            if (seconds <= 60) {
+                timerDiv.classList.add('danger');
+            } else if (seconds <= 120) {
+                timerDiv.classList.add('warning');
+            }
         }
 
         function toggleCardSelection(index) {
