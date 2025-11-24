@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = new Map();
 const waitingPlayers = [];
@@ -46,7 +46,7 @@ function checkHand(hand) {
     const counts = Object.values(rankCounts).sort((a, b) => b - a);
     const isFlush = Object.values(suitCounts).some(c => c === 5);
     const sortedValues = rankList.map(r => rankValues[r]).sort((a, b) => a - b);
-    
+
     let isStraight = true;
     for (let i = 1; i < sortedValues.length; i++) {
         if (sortedValues[i] !== sortedValues[i - 1] + 1) {
@@ -54,13 +54,13 @@ function checkHand(hand) {
             break;
         }
     }
-    
-    const isLowStraight = rankList.includes('A') && rankList.includes('2') && 
+
+    const isLowStraight = rankList.includes('A') && rankList.includes('2') &&
                           rankList.includes('3') && rankList.includes('4') && rankList.includes('5');
     if (isLowStraight) isStraight = true;
 
-    const isRoyalFlush = isFlush && isStraight && 
-                       rankList.includes('A') && rankList.includes('K') && 
+    const isRoyalFlush = isFlush && isStraight &&
+                       rankList.includes('A') && rankList.includes('K') &&
                        rankList.includes('Q') && rankList.includes('J') && rankList.includes('10');
 
     const groups = Object.entries(rankCounts)
@@ -69,7 +69,7 @@ function checkHand(hand) {
             if (a.count !== b.count) return b.count - a.count;
             return b.value - a.value;
         });
-    
+
     const kickers = groups.map(g => g.value);
 
     if (isRoyalFlush) return { name: 'ロイヤルフラッシュ', rank: 10, kickers: [14, 13, 12, 11, 10] };
@@ -98,12 +98,12 @@ function compareHands(hand1Result, hand2Result) {
     if (hand1Result.rank !== hand2Result.rank) {
         return hand1Result.rank > hand2Result.rank ? 1 : -1;
     }
-    
+
     for (let i = 0; i < hand1Result.kickers.length; i++) {
         if (hand1Result.kickers[i] > hand2Result.kickers[i]) return 1;
         if (hand1Result.kickers[i] < hand2Result.kickers[i]) return -1;
     }
-    
+
     return 0;
 }
 
@@ -114,7 +114,7 @@ io.on('connection', (socket) => {
         if (waitingPlayers.length > 0) {
             const opponent = waitingPlayers.shift();
             const roomId = `room_${socket.id}_${opponent.id}`;
-            
+
             const room = {
                 id: roomId,
                 players: [
@@ -126,28 +126,28 @@ io.on('connection', (socket) => {
                 phase: 'betting',
                 currentBet: 0
             };
-            
+
             rooms.set(roomId, room);
-            
+
             socket.join(roomId);
             opponent.join(roomId);
-            
+
             socket.roomId = roomId;
             opponent.roomId = roomId;
-            
-            io.to(socket.id).emit('matchFound', { 
-                roomId, 
+
+            io.to(socket.id).emit('matchFound', {
+                roomId,
                 playerId: socket.id,
                 opponentId: opponent.id,
                 playerIndex: 0
             });
-            io.to(opponent.id).emit('matchFound', { 
-                roomId, 
+            io.to(opponent.id).emit('matchFound', {
+                roomId,
                 playerId: opponent.id,
                 opponentId: socket.id,
                 playerIndex: 1
             });
-            
+
             console.log(`マッチング成功: ${roomId}`);
         } else {
             waitingPlayers.push(socket);
@@ -159,34 +159,34 @@ io.on('connection', (socket) => {
     socket.on('placeBet', ({ roomId, betAmount }) => {
         const room = rooms.get(roomId);
         if (!room || room.phase !== 'betting') return;
-        
+
         const player = room.players.find(p => p.id === socket.id);
         if (!player || player.ready) return;
-        
+
         if (betAmount < 10) {
             socket.emit('betError', '最低ベット額は10チップです');
             return;
         }
-        
+
         if (betAmount > player.chips) {
             socket.emit('betError', 'チップが足りません');
             return;
         }
-        
+
         player.chips -= betAmount;
         player.bet = betAmount;
         player.ready = true;
-        
-        io.to(socket.id).emit('betPlaced', { 
-            chips: player.chips, 
-            bet: player.bet 
+
+        io.to(socket.id).emit('betPlaced', {
+            chips: player.chips,
+            bet: player.bet
         });
-        
+
         const allReady = room.players.every(p => p.ready && p.bet > 0);
         if (allReady) {
             const minBet = Math.min(...room.players.map(p => p.bet));
             room.currentBet = minBet;
-            
+
             room.players.forEach(p => {
                 if (p.bet > minBet) {
                     const refund = p.bet - minBet;
@@ -195,7 +195,7 @@ io.on('connection', (socket) => {
                     p.socket.emit('betRefund', { refund, chips: p.chips, bet: p.bet });
                 }
             });
-            
+
             dealCards(room);
         }
     });
@@ -203,24 +203,24 @@ io.on('connection', (socket) => {
     socket.on('drawCards', ({ roomId, indices }) => {
         const room = rooms.get(roomId);
         if (!room || room.phase !== 'drawing') return;
-        
+
         const player = room.players.find(p => p.id === socket.id);
         if (!player || player.ready) return;
-        
+
         const hand = room.hands[socket.id];
         if (!hand) return;
-        
+
         for (let index of indices.sort((a, b) => b - a)) {
             if (index >= 0 && index < 5) {
                 hand[index] = room.deck.pop();
             }
         }
-        
+
         room.hands[socket.id] = hand;
         player.ready = true;
-        
+
         socket.emit('cardsDrawn', { hand });
-        
+
         const allDrawn = room.players.every(p => p.ready);
         if (allDrawn) {
             room.phase = 'showdown';
@@ -230,12 +230,12 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log('プレイヤーが切断しました:', socket.id);
-        
+
         const index = waitingPlayers.findIndex(p => p.id === socket.id);
         if (index !== -1) {
             waitingPlayers.splice(index, 1);
         }
-        
+
         if (socket.roomId) {
             const room = rooms.get(socket.roomId);
             if (room) {
@@ -253,7 +253,7 @@ io.on('connection', (socket) => {
 function dealCards(room) {
     room.deck = shuffle(createDeck());
     room.hands = {};
-    
+
     room.players.forEach(player => {
         const hand = [];
         for (let i = 0; i < 5; i++) {
@@ -261,10 +261,10 @@ function dealCards(room) {
         }
         room.hands[player.id] = hand;
         player.ready = false;
-        
+
         player.socket.emit('cardsDealt', { hand });
     });
-    
+
     room.phase = 'drawing';
 }
 
@@ -278,7 +278,7 @@ function evaluateWinner(room) {
             handResult
         };
     });
-    
+
     const comparison = compareHands(results[0].handResult, results[1].handResult);
     let winner;
     if (comparison > 0) {
@@ -288,9 +288,9 @@ function evaluateWinner(room) {
     } else {
         winner = -1;
     }
-    
+
     const pot = room.currentBet * 2;
-    
+
     if (winner === -1) {
         results.forEach(r => {
             r.player.chips += r.player.bet;
@@ -298,11 +298,11 @@ function evaluateWinner(room) {
     } else {
         results[winner].player.chips += pot;
     }
-    
+
     room.players.forEach((player, index) => {
         const isWinner = winner === index;
         const isDraw = winner === -1;
-        
+
         player.socket.emit('gameResult', {
             winner: isWinner ? 'you' : (isDraw ? 'draw' : 'opponent'),
             yourHand: results[index].hand,
@@ -312,11 +312,11 @@ function evaluateWinner(room) {
             chips: player.chips,
             pot
         });
-        
+
         player.bet = 0;
         player.ready = false;
     });
-    
+
     room.phase = 'betting';
     room.currentBet = 0;
 }
