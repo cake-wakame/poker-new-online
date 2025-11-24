@@ -214,7 +214,7 @@ io.on('connection', (socket) => {
         if (!room || room.phase !== 'drawing') return;
 
         const player = room.players.find(p => p.id === socket.id);
-        if (!player) return;
+        if (!player || player.ready) return;
 
         if (player.drawCount >= MAX_DRAW_COUNT) {
             socket.emit('drawError', 'ドロー回数の上限に達しました');
@@ -259,6 +259,7 @@ io.on('connection', (socket) => {
         const player = room.players.find(p => p.id === socket.id);
         if (!player || player.ready) return;
 
+        player.drawCount = MAX_DRAW_COUNT;
         player.ready = true;
         socket.emit('drawSkipped');
 
