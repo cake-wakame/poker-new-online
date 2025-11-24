@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: poker-game-online
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
