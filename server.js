@@ -16,6 +16,9 @@ const suits = ['hearts', 'diamonds', 'clubs', 'spades'];
 const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 const rankValues = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
 
+const TIME_LIMIT = 5 * 60 * 1000;
+const MAX_DRAW_COUNT = 3;
+
 function createDeck() {
     const deck = [];
     for (let suit of suits) {
@@ -118,13 +121,15 @@ io.on('connection', (socket) => {
             const room = {
                 id: roomId,
                 players: [
-                    { id: socket.id, socket: socket, chips: 1000, bet: 0, ready: false },
-                    { id: opponent.id, socket: opponent, chips: 1000, bet: 0, ready: false }
+                    { id: socket.id, socket: socket, chips: 1000, bet: 0, ready: false, drawCount: 0 },
+                    { id: opponent.id, socket: opponent, chips: 1000, bet: 0, ready: false, drawCount: 0 }
                 ],
                 deck: [],
                 hands: {},
                 phase: 'betting',
-                currentBet: 0
+                currentBet: 0,
+                timers: [],
+                bettingStartTime: Date.now()
             };
 
             rooms.set(roomId, room);
@@ -149,6 +154,8 @@ io.on('connection', (socket) => {
             });
 
             console.log(`マッチング成功: ${roomId}`);
+            
+            startBettingTimer(room);
         } else {
             waitingPlayers.push(socket);
             socket.emit('waiting');
@@ -184,6 +191,8 @@ io.on('connection', (socket) => {
 
         const allReady = room.players.every(p => p.ready && p.bet > 0);
         if (allReady) {
+            clearRoomTimers(room);
+            
             const minBet = Math.min(...room.players.map(p => p.bet));
             room.currentBet = minBet;
 
@@ -205,7 +214,12 @@ io.on('connection', (socket) => {
         if (!room || room.phase !== 'drawing') return;
 
         const player = room.players.find(p => p.id === socket.id);
-        if (!player || player.ready) return;
+        if (!player) return;
+
+        if (player.drawCount >= MAX_DRAW_COUNT) {
+            socket.emit('drawError', 'ドロー回数の上限に達しました');
+            return;
+        }
 
         const hand = room.hands[socket.id];
         if (!hand) return;
@@ -217,12 +231,40 @@ io.on('connection', (socket) => {
         }
 
         room.hands[socket.id] = hand;
+        player.drawCount++;
+
+        const remainingDraws = MAX_DRAW_COUNT - player.drawCount;
+        socket.emit('cardsDrawn', { 
+            hand, 
+            drawCount: player.drawCount,
+            remainingDraws 
+        });
+
+        if (player.drawCount >= MAX_DRAW_COUNT) {
+            player.ready = true;
+        }
+
+        const allReady = room.players.every(p => p.ready);
+        if (allReady) {
+            clearRoomTimers(room);
+            room.phase = 'showdown';
+            evaluateWinner(room);
+        }
+    });
+
+    socket.on('skipDraw', ({ roomId }) => {
+        const room = rooms.get(roomId);
+        if (!room || room.phase !== 'drawing') return;
+
+        const player = room.players.find(p => p.id === socket.id);
+        if (!player || player.ready) return;
+
         player.ready = true;
+        socket.emit('drawSkipped');
 
-        socket.emit('cardsDrawn', { hand });
-
-        const allDrawn = room.players.every(p => p.ready);
-        if (allDrawn) {
+        const allReady = room.players.every(p => p.ready);
+        if (allReady) {
+            clearRoomTimers(room);
             room.phase = 'showdown';
             evaluateWinner(room);
         }
@@ -239,6 +281,7 @@ io.on('connection', (socket) => {
         if (socket.roomId) {
             const room = rooms.get(socket.roomId);
             if (room) {
+                clearRoomTimers(room);
                 room.players.forEach(p => {
                     if (p.id !== socket.id) {
                         p.socket.emit('opponentDisconnected');
@@ -261,11 +304,18 @@ function dealCards(room) {
         }
         room.hands[player.id] = hand;
         player.ready = false;
+        player.drawCount = 0;
 
-        player.socket.emit('cardsDealt', { hand });
+        player.socket.emit('cardsDealt', { 
+            hand,
+            drawCount: 0,
+            remainingDraws: MAX_DRAW_COUNT
+        });
     });
 
     room.phase = 'drawing';
+    room.drawingStartTime = Date.now();
+    startDrawingTimer(room);
 }
 
 function evaluateWinner(room) {
@@ -319,6 +369,170 @@ function evaluateWinner(room) {
 
     room.phase = 'betting';
     room.currentBet = 0;
+    room.bettingStartTime = Date.now();
+    
+    room.players.forEach(player => {
+        player.drawCount = 0;
+    });
+
+    startBettingTimer(room);
+}
+
+function clearRoomTimers(room) {
+    if (room.timers) {
+        room.timers.forEach(timer => clearTimeout(timer));
+        room.timers = [];
+    }
+}
+
+function startBettingTimer(room) {
+    clearRoomTimers(room);
+    
+    const timer = setTimeout(() => {
+        if (room.phase !== 'betting') return;
+
+        const notReadyPlayers = room.players.filter(p => !p.ready || p.bet === 0);
+        
+        if (notReadyPlayers.length === 0) return;
+
+        if (notReadyPlayers.length === 2) {
+            room.players.forEach(p => {
+                p.socket.emit('gameResult', {
+                    winner: 'draw',
+                    yourHand: [],
+                    yourHandName: 'タイムアウト',
+                    opponentHand: [],
+                    opponentHandName: 'タイムアウト',
+                    chips: p.chips,
+                    pot: 0,
+                    reason: '両プレイヤーがタイムアウトしました'
+                });
+                p.bet = 0;
+            });
+
+            room.phase = 'betting';
+            room.currentBet = 0;
+            room.bettingStartTime = Date.now();
+            
+            room.players.forEach(player => {
+                player.bet = 0;
+                player.ready = false;
+                player.drawCount = 0;
+            });
+
+            startBettingTimer(room);
+            return;
+        }
+
+        const winner = room.players.find(p => p.ready && p.bet > 0);
+        const loser = notReadyPlayers[0];
+
+        if (winner && loser) {
+            const totalPot = winner.bet + loser.bet;
+            winner.chips += totalPot;
+
+            room.players.forEach(p => {
+                const isWinner = p.id === winner.id;
+                p.socket.emit('gameResult', {
+                    winner: isWinner ? 'you' : 'opponent',
+                    yourHand: [],
+                    yourHandName: isWinner ? '相手タイムアウト' : 'タイムアウト',
+                    opponentHand: [],
+                    opponentHandName: isWinner ? 'タイムアウト' : '相手タイムアウト',
+                    chips: p.chips,
+                    pot: totalPot,
+                    reason: 'ベット時間切れ'
+                });
+            });
+
+            room.phase = 'betting';
+            room.currentBet = 0;
+            room.bettingStartTime = Date.now();
+            
+            room.players.forEach(player => {
+                player.bet = 0;
+                player.ready = false;
+                player.drawCount = 0;
+            });
+
+            startBettingTimer(room);
+        }
+    }, TIME_LIMIT);
+
+    room.timers.push(timer);
+
+    room.players.forEach(p => {
+        p.socket.emit('timerStarted', { 
+            phase: 'betting', 
+            timeLimit: TIME_LIMIT,
+            startTime: room.bettingStartTime
+        });
+    });
+}
+
+function startDrawingTimer(room) {
+    clearRoomTimers(room);
+    
+    const timer = setTimeout(() => {
+        if (room.phase !== 'drawing') return;
+
+        const notReadyPlayers = room.players.filter(p => !p.ready);
+        
+        if (notReadyPlayers.length === 0) return;
+
+        if (notReadyPlayers.length === 2) {
+            room.phase = 'showdown';
+            evaluateWinner(room);
+            return;
+        }
+
+        const winner = room.players.find(p => p.ready);
+        const loser = notReadyPlayers[0];
+
+        if (winner && loser) {
+            const totalPot = room.currentBet * 2;
+            winner.chips += totalPot;
+
+            room.players.forEach((p, index) => {
+                const isWinner = p.id === winner.id;
+                const winnerHand = room.hands[winner.id] || [];
+                const loserHand = room.hands[loser.id] || [];
+
+                p.socket.emit('gameResult', {
+                    winner: isWinner ? 'you' : 'opponent',
+                    yourHand: room.hands[p.id],
+                    yourHandName: isWinner ? checkHand(winnerHand).name : 'タイムアウト',
+                    opponentHand: room.hands[room.players[1 - index].id],
+                    opponentHandName: isWinner ? 'タイムアウト' : checkHand(winnerHand).name,
+                    chips: p.chips,
+                    pot: totalPot,
+                    reason: 'ドロー時間切れ'
+                });
+            });
+
+            room.phase = 'betting';
+            room.currentBet = 0;
+            room.bettingStartTime = Date.now();
+            
+            room.players.forEach(player => {
+                player.bet = 0;
+                player.ready = false;
+                player.drawCount = 0;
+            });
+
+            startBettingTimer(room);
+        }
+    }, TIME_LIMIT);
+
+    room.timers.push(timer);
+
+    room.players.forEach(p => {
+        p.socket.emit('timerStarted', { 
+            phase: 'drawing', 
+            timeLimit: TIME_LIMIT,
+            startTime: room.drawingStartTime
+        });
+    });
 }
 
 const PORT = process.env.PORT || 5000;
