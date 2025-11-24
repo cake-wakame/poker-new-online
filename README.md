@@ -1,79 +1,56 @@
-Overview
-This is a real-time online poker game built with Node.js, Express, and Socket.IO. The application enables multiplayer poker gameplay through WebSocket connections, allowing players to join rooms and compete against each other in live poker matches. The game implements standard poker hand evaluation logic and manages game state across multiple concurrent rooms.
+ポーカーゲーム - オンライン対戦
+リアルタイムでポーカー対戦が楽しめるオンラインゲームです！
 
-User Preferences
-Preferred communication style: Simple, everyday language.
+機能
+リアルタイムマルチプレイヤー対戦
+WebSocketを使った即座の通信
+ポーカーの全ての役に対応
+チップ管理システム
+カード交換（ドロー）機能
+Renderへのデプロイ方法
+方法1: render.yamlを使用（推奨）
+GitHubにリポジトリをプッシュ
+Renderダッシュボードで「New +」→「Blueprint」を選択
+リポジトリを接続
+自動的にrender.yamlの設定が読み込まれデプロイされます
+方法2: 手動設定
+Renderダッシュボードで「New +」→「Web Service」を選択
 
-System Architecture
-Frontend Architecture
-Single-Page Application Design
+GitHubリポジトリを接続
 
-Pure HTML/CSS/JavaScript implementation without frameworks
-Real-time UI updates driven by Socket.IO client events
-Responsive design using CSS flexbox and gradient backgrounds
-Client-side game state managed through socket event listeners
-Rationale: A framework-less approach keeps the application lightweight and reduces complexity for a real-time game where Socket.IO handles most of the state synchronization.
+以下の設定を入力：
 
-Backend Architecture
-Express + Socket.IO Server
+Name: poker-game-online（任意の名前）
+Environment: Node
+Build Command: npm install
+Start Command: npm start
+Plan: Free（または他のプラン）
+「Create Web Service」をクリック
 
-Express serves static files (HTML, CSS, JS)
-Socket.IO manages WebSocket connections for real-time communication
-In-memory game state storage using JavaScript Maps
-Room-based multiplayer architecture
-Key Components:
+ローカルでの実行
+# 依存関係をインストール
+npm install
+# サーバーを起動
+npm start
 
-Room Management System: Uses a Map data structure to track active game rooms and their state
-Player Matchmaking: Maintains a waiting queue (waitingPlayers array) to pair players together
-Game Logic Engine: Implements poker hand evaluation, deck shuffling, and card dealing
-Rationale: In-memory storage was chosen for simplicity and low latency in real-time gameplay. This approach is suitable for a game where session persistence isn't critical, though it means game state is lost on server restart.
+サーバーはデフォルトでポート5000で起動します（環境変数PORTで変更可能）。
 
-Trade-offs:
+技術スタック
+バックエンド: Node.js + Express
+リアルタイム通信: Socket.IO
+フロントエンド: HTML/CSS/JavaScript
+ゲームルール
+「対戦相手を探す」ボタンをクリック
+マッチング成立後、ベット額を入力
+5枚のカードが配られます
+交換したいカードをクリックして選択
+「ドロー」ボタンで選択したカードを交換
+役の強さで勝敗が決まります
+Render特有の設定
+このプロジェクトはRenderでのデプロイに最適化されています：
 
-Pros: Extremely fast access, simple implementation, no database overhead
-Cons: No persistence, limited scalability, state lost on crashes
-Game State Management
-Card Deck System
-
-52-card standard deck representation with suits (hearts, diamonds, clubs, spades) and ranks (2-A)
-Fisher-Yates shuffle algorithm for randomization
-Rank values mapped for hand evaluation (2=2, J=11, Q=12, K=13, A=14)
-Hand Evaluation Logic
-
-Implemented poker hand ranking system (appears incomplete in provided code)
-Checks for flush, straight, pairs, and other poker combinations
-Uses count-based analysis of ranks and suits
-Communication Protocol
-WebSocket Events Architecture
-
-Bidirectional real-time communication between clients and server
-Event-driven game flow (player actions, game updates, state changes)
-Room-based broadcasting for multi-player synchronization
-Rationale: Socket.IO was chosen over HTTP polling for true real-time gameplay with minimal latency, essential for interactive card games.
-
-External Dependencies
-Core Dependencies
-express (^4.18.2)
-
-Purpose: HTTP server and static file serving
-Used for: Hosting the web application and serving game assets
-socket.io (^4.6.1)
-
-Purpose: WebSocket communication library
-Used for: Real-time bidirectional event-based communication between clients and server
-Enables: Player matchmaking, game state synchronization, live updates
-Runtime Environment
-Node.js
-
-Required for server execution
-No specific version constraints defined in package.json
-Notable Absence
-No Database System
-
-Current implementation uses in-memory storage only
-No persistence layer for game history, user accounts, or statistics
-Consider adding a database (e.g., PostgreSQL with Drizzle ORM) for:
-Player profiles and authentication
-Game history and statistics
-Leaderboards
-Persistent room state
+process.env.PORTを使用して動的ポート設定に対応
+0.0.0.0にバインドして外部アクセスを許可
+render.yamlでワンクリックデプロイに対応
+ライセンス
+MIT
